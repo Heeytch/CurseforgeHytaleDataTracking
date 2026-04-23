@@ -9,3 +9,4 @@ This project was created to gather data and monitor mod performance. It serves a
 ## Features
 * Tracks download statistics for Hytale mods on CurseForge.
 * Provides data insights to see how well the team is performing compared to the top mods.
+* Has different custom charts/filters to display the data in custom ways
