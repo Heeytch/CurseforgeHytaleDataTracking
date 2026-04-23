@@ -1,0 +1,287 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hytale Mod Analytics</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #60a5fa;
+            --success: #10b981;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .dashboard {
+            width: 100%;
+            max-width: 1200px;
+            background-color: var(--panel-bg);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        button, select {
+            background-color: #334155;
+            color: var(--text-main);
+            border: 1px solid #475569;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        button:hover, select:hover {
+            background-color: var(--accent);
+            border-color: var(--accent-hover);
+        }
+
+        #refreshBtn {
+            background-color: var(--success);
+            border-color: #059669;
+            font-weight: bold;
+        }
+
+        #refreshBtn:hover {
+            background-color: #34d399;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 60vh;
+            width: 100%;
+        }
+
+        .status {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 10px;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard">
+        <div class="header">
+            <h2>Hytale Mods Tracker</h2>
+            <div class="controls">
+                <select id="metricSelector" onchange="updateChart()">
+                    <option value="total">Total Downloads</option>
+                    <option value="velocity">Growth Velocity (New DLs)</option>
+                    <option value="rank">Leaderboard Rank</option>
+                    <option value="modpacks">Modpacks Included</option>
+                </select>
+                <select id="timeSelector" onchange="updateChart()">
+                    <option value="all">All Time</option>
+                    <option value="7">Last 7 Entries</option>
+                    <option value="24">Last 24 Entries</option>
+                </select>
+                <select id="topSelector" onchange="updateChart()">
+                    <option value="all">All Mods</option>
+                    <option value="3">Top 3</option>
+                    <option value="5">Top 5</option>
+                    <option value="10">Top 10</option>
+                </select>
+                <select id="aggregationSelector" onchange="updateChart()">
+                    <option value="all">All Data Points</option>
+                    <option value="daily">1 Per Day (Highest)</option>
+                </select>
+                <button id="refreshBtn" onclick="fetchData()">⟳ Refresh Data</button>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="modChart"></canvas>
+        </div>
+        <div class="status" id="statusText">Awaiting data...</div>
+    </div>
+
+    <script>
+        let rawData = {};
+        let chartInstance = null;
+        const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16', '#64748b'];
+
+        async function fetchData() {
+            const statusText = document.getElementById('statusText');
+            statusText.innerText = "Fetching latest data...";
+
+            try {
+                const response = await fetch('mod_data.json');
+                if (!response.ok) throw new Error("Could not load mod_data.json");
+
+                rawData = await response.json();
+
+                const now = new Date();
+                statusText.innerText = `Last updated: ${now.toLocaleTimeString()}`;
+                updateChart();
+            } catch (error) {
+                console.error("Error fetching data:", error);
+                statusText.innerText = "Error: Could not load data. Ensure you are running a local server.";
+            }
+        }
+
+        function processData(metric, timeLimit, topLimit, aggregation) {
+            const datasets = [];
+            let globalLabels = [];
+            
+            // 1. Get global labels
+            for (const mod in rawData) {
+                if (rawData[mod].history.timestamps.length > globalLabels.length) {
+                    globalLabels = rawData[mod].history.timestamps;
+                }
+            }
+
+            // 2. Determine indices to keep for daily aggregation (sentaku)
+            let indicesToKeep = [];
+            if (aggregation === 'daily') {
+                let dateMap = {};
+                globalLabels.forEach((ts, index) => {
+                    let date = ts.split(' ')[0];
+                    dateMap[date] = index; // Overwrites with the latest index for the day (highest cumulative values)
+                });
+                indicesToKeep = Object.values(dateMap).sort((a, b) => a - b);
+            } else {
+                indicesToKeep = globalLabels.map((_, i) => i);
+            }
+
+            // 3. Filter and sort mods by their most recent rank
+            let modsArray = Object.entries(rawData).map(([modName, modData]) => {
+                let ranks = modData.history.ranks;
+                let currentRank = ranks[ranks.length - 1]; 
+                return { modName, modData, currentRank };
+            });
+
+            modsArray.sort((a, b) => a.currentRank - b.currentRank);
+
+            if (topLimit !== 'all') {
+                modsArray = modsArray.slice(0, parseInt(topLimit));
+            }
+
+            let finalLabels = indicesToKeep.map(i => globalLabels[i]);
+
+            // 4. Apply time limit
+            if (timeLimit !== 'all') {
+                finalLabels = finalLabels.slice(-parseInt(timeLimit));
+                indicesToKeep = indicesToKeep.slice(-parseInt(timeLimit));
+            }
+
+            let colorIndex = 0;
+            for (const {modName, modData} of modsArray) {
+                let yData = [];
+
+                if (metric === 'total' || metric === 'velocity') {
+                    yData = modData.history.downloads;
+                } else if (metric === 'rank') {
+                    yData = modData.history.ranks;
+                } else if (metric === 'modpacks') {
+                    yData = modData.history.modpacks_included;
+                }
+
+                // Map data using filtered indices
+                let filteredYData = indicesToKeep.map(i => yData[i]);
+
+                if (metric === 'velocity') {
+                    let velocityData = [0];
+                    for (let i = 1; i < filteredYData.length; i++) {
+                        velocityData.push(filteredYData[i] - filteredYData[i - 1]);
+                    }
+                    filteredYData = velocityData;
+                }
+
+                datasets.push({
+                    label: modName,
+                    data: filteredYData,
+                    borderColor: colors[colorIndex % colors.length],
+                    backgroundColor: colors[colorIndex % colors.length] + '20',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    fill: metric === 'velocity'
+                });
+                colorIndex++;
+            }
+            return { labels: finalLabels, datasets };
+        }
+
+        function updateChart() {
+            if (Object.keys(rawData).length === 0) return;
+
+            const metric = document.getElementById('metricSelector').value;
+            const timeLimit = document.getElementById('timeSelector').value;
+            const topLimit = document.getElementById('topSelector').value;
+            const aggregation = document.getElementById('aggregationSelector').value;
+            
+            const chartData = processData(metric, timeLimit, topLimit, aggregation);
+
+            if (chartInstance) chartInstance.destroy();
+
+            const isRank = metric === 'rank';
+            const isVelocity = metric === 'velocity';
+            const isModpacks = metric === 'modpacks';
+
+            const ctx = document.getElementById('modChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        tooltip: { backgroundColor: 'rgba(15, 23, 42, 0.9)', padding: 12, cornerRadius: 8 },
+                        legend: { labels: { color: '#f8fafc', padding: 20 } }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10 }, grid: { color: '#334155', drawBorder: false } },
+                        y: {
+                            ticks: {
+                                color: '#94a3b8',
+                                stepSize: isRank ? 1 : undefined
+                            },
+                            grid: { color: '#334155', drawBorder: false },
+                            reverse: isRank,
+                            beginAtZero: isVelocity || isModpacks
+                        }
+                    }
+                }
+            });
+        }
+
+        window.onload = fetchData;
+    </script>
+</body>
+</html>
